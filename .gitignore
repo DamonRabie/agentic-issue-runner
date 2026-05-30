@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Runtime artifacts produced by unattended runs.
+artifacts/
+
+# Local operator/editor state. These files can contain project paths, command
+# history, credentials, or machine-specific runtime details.
+.idea/
+.claude/settings.local.json
+.agent-library/runtime_specs/*.local.toml
+.agent-library/agentic_issue_runner.toml
+

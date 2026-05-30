@@ -1,0 +1,81 @@
+# Agentic Issue Runner execution policy
+# Format: Starlark prefix_rule() calls
+# Priority: forbidden > prompt > allow
+# Test with: codex execpolicy check --pretty --rules .codex/rules/overnight-agent.rules -- <cmd>
+
+# ── Forbidden: filesystem destruction ────────────────────────────────────────
+prefix_rule(pattern=["rm"], decision="forbidden", justification="Use git to manage file removal.")
+prefix_rule(pattern=["rmdir"], decision="forbidden", justification="Use git to manage file removal.")
+prefix_rule(pattern=["unlink"], decision="forbidden", justification="Use git to manage file removal.")
+
+# ── Forbidden: destructive git ops ───────────────────────────────────────────
+# Explicitly forbidden command examples include: git push origin master
+prefix_rule(pattern=["git", "reset"], decision="forbidden", justification="Use safe_cmd for mutating git ops.")
+prefix_rule(pattern=["git", "clean"], decision="forbidden", justification="Use safe_cmd for mutating git ops.")
+prefix_rule(pattern=["git", "restore"], decision="forbidden", justification="Use safe_cmd for mutating git ops.")
+prefix_rule(pattern=["git", "checkout", "--"], decision="forbidden", justification="Use safe_cmd for mutating git ops.")
+prefix_rule(pattern=["git", "branch", ["-D", "-d"]], decision="forbidden", justification="Use safe_cmd for branch deletion.")
+prefix_rule(pattern=["git", "push", ["--force", "-f"]], decision="forbidden", justification="No force pushes.")
+prefix_rule(pattern=["git", "push", "origin", "master"], decision="forbidden", justification="Use PR workflow via safe_cmd.")
+prefix_rule(pattern=["git", "push", "origin", "HEAD:master"], decision="forbidden", justification="Use PR workflow via safe_cmd.")
+
+# ── Forbidden: GitLab mutations ───────────────────────────────────────────────
+# Explicitly forbidden command examples include: glab mr merge, glab mr approve,
+# glab issue close
+prefix_rule(pattern=["glab", "mr", "merge"], decision="forbidden", justification="Use safe_cmd for GitLab mutations.")
+prefix_rule(pattern=["glab", "mr", "approve"], decision="forbidden", justification="Use safe_cmd for GitLab mutations.")
+prefix_rule(pattern=["glab", "issue", "close"], decision="forbidden", justification="Use safe_cmd for GitLab mutations.")
+prefix_rule(pattern=["glab", "issue", "update"], decision="forbidden", justification="Use safe_cmd for GitLab mutations.")
+
+# ── Forbidden: package installs ───────────────────────────────────────────────
+# Explicitly forbidden command examples include: python -m pip install
+prefix_rule(pattern=["pip"], decision="forbidden", justification="No package installs during agent runs.")
+prefix_rule(pattern=["python", "-m", "pip"], decision="forbidden", justification="No package installs during agent runs.")
+prefix_rule(pattern=["npm", "install"], decision="forbidden", justification="No package installs during agent runs.")
+prefix_rule(pattern=["uv", "add"], decision="forbidden", justification="No package installs during agent runs.")
+prefix_rule(pattern=["poetry", "add"], decision="forbidden", justification="No package installs during agent runs.")
+prefix_rule(pattern=["conda", "install"], decision="forbidden", justification="No package installs during agent runs.")
+
+# ── Forbidden: system/remote access ──────────────────────────────────────────
+prefix_rule(pattern=["ssh"], decision="forbidden", justification="No remote access during agent runs.")
+prefix_rule(pattern=["scp"], decision="forbidden", justification="No remote access during agent runs.")
+prefix_rule(pattern=["rsync"], decision="forbidden", justification="No remote access during agent runs.")
+prefix_rule(pattern=["chmod"], decision="forbidden", justification="No permission changes during agent runs.")
+prefix_rule(pattern=["chown"], decision="forbidden", justification="No ownership changes during agent runs.")
+prefix_rule(pattern=["sudo"], decision="forbidden", justification="No sudo during agent runs.")
+prefix_rule(pattern=["su"], decision="forbidden", justification="No su during agent runs.")
+prefix_rule(pattern=["docker"], decision="forbidden", justification="No docker during agent runs.")
+prefix_rule(pattern=["docker-compose"], decision="forbidden", justification="No docker-compose during agent runs.")
+prefix_rule(pattern=["kubectl"], decision="forbidden", justification="No kubectl during agent runs.")
+prefix_rule(pattern=["terraform"], decision="forbidden", justification="No terraform during agent runs.")
+
+# ── Allowed: safe read-only git ───────────────────────────────────────────────
+prefix_rule(pattern=["git", "status"], decision="allow")
+prefix_rule(pattern=["git", "diff"], decision="allow")
+prefix_rule(pattern=["git", "log"], decision="allow")
+prefix_rule(pattern=["git", "show"], decision="allow")
+prefix_rule(pattern=["git", "branch", "--show-current"], decision="allow")
+prefix_rule(pattern=["git", "rev-parse"], decision="allow")
+prefix_rule(pattern=["git", "ls-files"], decision="allow")
+
+# ── Allowed: safe GitLab reads ────────────────────────────────────────────────
+prefix_rule(pattern=["glab", "issue", "list"], decision="allow")
+prefix_rule(pattern=["glab", "issue", "view"], decision="allow")
+prefix_rule(pattern=["glab", "issue", "note"], decision="allow")
+prefix_rule(pattern=["glab", "mr", "list"], decision="allow")
+prefix_rule(pattern=["glab", "mr", "view"], decision="allow")
+prefix_rule(pattern=["glab", "api"], decision="allow")
+
+# ── Allowed: safe tools ───────────────────────────────────────────────────────
+# Explicitly allowed safe mutation gate: python -m tools.agentic_issue_runner.safe_cmd
+# Explicitly allowed edit gate: Codex uses apply_patch for tracked source edits.
+prefix_rule(pattern=["rg"], decision="allow")
+prefix_rule(pattern=["sed"], decision="allow")
+prefix_rule(pattern=["ls"], decision="allow")
+prefix_rule(pattern=["pwd"], decision="allow")
+prefix_rule(pattern=["apply_patch"], decision="allow")
+prefix_rule(pattern=["python", "-m", "pytest"], decision="allow")
+prefix_rule(pattern=["python", "-m", "unittest"], decision="allow")
+prefix_rule(pattern=["python", "-m", "compileall"], decision="allow")
+prefix_rule(pattern=["pytest"], decision="allow")
+prefix_rule(pattern=["python", "-m", "tools.agentic_issue_runner.safe_cmd"], decision="allow")

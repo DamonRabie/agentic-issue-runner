@@ -1,0 +1,4 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+# Project-local Codex config.
+# The canonical file lives under .agent-library and is symlinked into .codex/.

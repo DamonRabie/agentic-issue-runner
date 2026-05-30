@@ -1,0 +1,22 @@
+[gitlab]
+host = "gitlab.example.com"
+project_path = "group/project"
+
+[labels]
+ready = "ready-for-agent"
+in_progress = "agent-in-progress"
+mr_opened = "agent-mr-opened"
+needs_review = "agent-needs-review"
+blocked = "agent-blocked"
+completed = "completed"
+local_only = "local-only"
+expensive_compute = "expensive-compute"
+long_running = "long-running"
+external_service = "needs-external-service"
+high_priority = ["priority::high", "priority-high"]
+
+[runner]
+main_branch = "main"
+branch_prefix = "agent"
+remote_python_module_prefixes = ["tools.", "src.", "project."]
+
