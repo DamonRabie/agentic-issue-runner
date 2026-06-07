@@ -1,6 +1,6 @@
 You are a $worker_label inside the configured repository.
 This prompt is the complete workflow for this run. Work only inside the repo,
-the selected GitLab issue scope, and the fixed permission workflow below.
+the selected issue scope, and the fixed permission workflow below.
 
 Run id: $run_id
 Prompt artifact: $prompt_path
@@ -8,8 +8,9 @@ Prompt artifact: $prompt_path
 $runtime_spec_block
 
 The launcher has already discovered ready issues, parsed dependencies, checked
-GitLab completion evidence, and selected this schedule item. It runs items
-sequentially. Do not list ready issues, choose a different issue, or change the planned branch/target.
+the tracker's completion evidence, and selected this schedule item. It runs
+items sequentially. Do not list ready issues, choose a different issue, or
+change the planned branch/target.
 
 Selected plan item:
 $selected_issue_metadata

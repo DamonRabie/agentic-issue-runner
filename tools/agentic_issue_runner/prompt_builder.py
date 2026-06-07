@@ -13,7 +13,7 @@ from string import Template
 from tools.agentic_issue_runner.models import ScheduledIssue
 from tools.agentic_issue_runner.project_spec import ProjectRuntimeSpec
 
-WORKER_SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "worker_system.md"
+WORKER_SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent / "project" / "worker_system.md"
 
 
 def load_worker_system_prompt(path: Path = WORKER_SYSTEM_PROMPT_PATH) -> Template:
