@@ -18,6 +18,8 @@ Do not merely split text into small tickets. First understand the intended end s
   - `AFK`: an agent can implement, validate, and merge without additional human judgment.
   - `HITL`: human review, data labeling, product/taxonomy judgment, architecture decision, or approval is inherently required.
 - Ask for user approval before publishing or editing tracker issues unless the user explicitly says to publish without review.
+- Treat user corrections as constraints, not suggestions. When the user merges, splits, reorders, removes validation gates, or changes blocking relationships, update the full issue set and dependency chain before publishing.
+- Keep tracker state deliberate. Labels, milestones, assignees, workflow states, and readiness markers must be explicitly approved or verified from existing tracker conventions before use.
 
 ## Process
 
@@ -63,12 +65,16 @@ Do not merely split text into small tickets. First understand the intended end s
    - Should any slices be merged or split further?
    - Are the correct slices marked `HITL` and `AFK`?
 
-   Iterate until the user approves the breakdown.
+   Iterate until the user approves the breakdown. If the user gives edits, restate the resulting final issue set before publishing when the edits materially change granularity, order, issue type, validation scope, or dependency relationships.
 
 6. **Publish Only After Approval**
    - Publish approved issues in dependency order so real issue identifiers can be referenced in downstream `Blocked by` sections.
    - Do not close, edit, or relabel parent issues unless explicitly asked.
    - If the user approves publishing but not readiness labels, publish with the domain label only.
+   - Use the actual issue identifiers returned by the tracker. Never assume identifiers are contiguous or predictable.
+   - When textual dependencies need both upstream and downstream references, publish with placeholders only where unavoidable, then patch descriptions after all needed identifiers exist.
+   - Read back each created or edited issue and verify the title, state, labels, description, and dependency text.
+   - If an accidental description, label, milestone, assignee, or workflow-state change is detected during readback, correct it immediately when the intended state is unambiguous.
 
 ## Issue Quality Gate
 
@@ -115,6 +121,10 @@ Use this body for approved issues:
 ## Blocked by
 
 <Issue references or "None - can start immediately">
+
+## Blocks
+
+<Issue references or "None">
 ```
 
 ## Data/Remote Issue Checks
@@ -132,11 +142,14 @@ Use this body for approved issues:
 - Do not assume native blocking links are supported. Check the available CLI help; if native blocking cannot be created, record dependencies explicitly in `## Blocked by` and `## Blocks` sections.
 - Publish issues first, read back each created issue, and verify state, title, labels, project path, and description before writing dependency references.
 - Use the issue reference syntax required by the configured tracker. Do not use merge-request or pull-request syntax unless the user explicitly asked for it.
+- Prepare issue bodies in temporary files or another reviewable local form before creation when the tracker CLI supports file-backed descriptions. Verify the CLI syntax for file-backed fields before creating issues; some CLIs treat literal values and file references differently.
+- Do a final readback after dependency patches. Confirm no placeholder text remains and that upstream `Blocks` and downstream `Blocked by` sections agree.
 
 ## Labels
 
 - Every published issue should have one project/domain label when the domain is clear.
 - Prefer existing labels to new labels, and match the label vocabulary already used by the tracker.
-- Treat readiness labels as workflow state. Apply them only when the user explicitly approves readiness labeling during the publishing step.
+- Treat readiness labels and automation labels as workflow state. Apply them only when the user explicitly approves them during the publishing step.
+- Some trackers or templates may add default labels automatically. Read back labels after creation and remove unapproved workflow labels when the intended label set is clear.
 - If the intended label is missing, do not silently create it. Ask before creating the label unless the user explicitly instructed you to create missing labels.
 - If an issue spans multiple domains, choose the dominant deliverable's project label and mention the secondary area in the issue body rather than applying many project labels.
