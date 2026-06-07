@@ -10,5 +10,4 @@ artifacts/
 .idea/
 .claude/settings.local.json
 .agent-library/runtime_specs/*.local.toml
-.agent-library/agentic_issue_runner.toml
 

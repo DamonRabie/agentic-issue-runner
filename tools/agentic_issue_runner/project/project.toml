@@ -1,0 +1,42 @@
+# Project-level config for the agentic issue runner.
+#
+# Edit this file in place to fit your project. It lives alongside
+# worker_system.md because everything in tools/agentic_issue_runner/project/
+# is the per-project customization surface (prompt + config). The .py modules
+# in tools/agentic_issue_runner/ are reusable across projects and should not
+# be edited per-project.
+#
+# The defaults below run in local mode against `artifacts/issues/`. That path
+# is gitignored on purpose: create your own `ISSUE-NNN-*.md` files there
+# (see README "local mode" section for the expected frontmatter). Switch
+# `mode = "glab"` and fill in the [gitlab] section to drive a real GitLab
+# project instead.
+#
+# To run with a different config file without editing this one, pass its path
+# via the `AIR_CONFIG` env var.
+
+[runner]
+mode = "local"
+main_branch = "main"
+branch_prefix = "agent"
+remote_python_module_prefixes = ["tools.", "src.", "project."]
+
+[local]
+issues_dir = "artifacts/issues"
+
+[gitlab]
+host = "gitlab.example.com"
+project_path = "group/project"
+
+[labels]
+ready = "ready-for-agent"
+in_progress = "agent-in-progress"
+mr_opened = "agent-mr-opened"
+needs_review = "agent-needs-review"
+blocked = "agent-blocked"
+completed = "completed"
+local_only = "local-only"
+expensive_compute = "expensive-compute"
+long_running = "long-running"
+external_service = "needs-external-service"
+high_priority = ["priority::high", "priority-high"]

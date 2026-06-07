@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 CONFIG_ENV_KEY = "AIR_CONFIG"
-DEFAULT_CONFIG_PATH = Path(".agent-library") / "agentic_issue_runner.toml"
+DEFAULT_CONFIG_PATH = Path("tools") / "agentic_issue_runner" / "project" / "project.toml"
 
 
 @dataclass(frozen=True)
