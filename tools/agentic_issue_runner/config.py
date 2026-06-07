@@ -59,6 +59,12 @@ class RunnerConfig:
     main_branch: str = "main"
     branch_prefix: str = "agent"
     remote_python_module_prefixes: tuple[str, ...] = ("tools.", "src.", "project.")
+    mode: str = "glab"  # "glab" | "local"
+
+
+@dataclass(frozen=True)
+class LocalConfig:
+    issues_dir: str = "docs/issues"
 
 
 @dataclass(frozen=True)
@@ -66,6 +72,7 @@ class AgenticIssueRunnerConfig:
     gitlab: GitLabConfig = field(default_factory=GitLabConfig)
     labels: LabelConfig = field(default_factory=LabelConfig)
     runner: RunnerConfig = field(default_factory=RunnerConfig)
+    local: LocalConfig = field(default_factory=LocalConfig)
 
 
 def repo_root_from_module() -> Path:
@@ -115,8 +122,9 @@ def load_config(repo_root: Path | None = None) -> AgenticIssueRunnerConfig:
     gitlab_payload = payload.get("gitlab", {})
     labels_payload = payload.get("labels", {})
     runner_payload = payload.get("runner", {})
-    if not isinstance(gitlab_payload, dict) or not isinstance(labels_payload, dict) or not isinstance(runner_payload, dict):
-        raise ValueError("config sections gitlab, labels, and runner must be TOML tables")
+    local_payload = payload.get("local", {})
+    if not isinstance(gitlab_payload, dict) or not isinstance(labels_payload, dict) or not isinstance(runner_payload, dict) or not isinstance(local_payload, dict):
+        raise ValueError("config sections gitlab, labels, runner, and local must be TOML tables")
 
     env_host = os.environ.get("AIR_GITLAB_HOST")
     env_project = os.environ.get("AIR_GITLAB_PROJECT")
@@ -137,6 +145,7 @@ def load_config(repo_root: Path | None = None) -> AgenticIssueRunnerConfig:
         external_service=_string(labels_payload, "external_service", LabelConfig.external_service),
         high_priority=_string_tuple(labels_payload, "high_priority", LabelConfig.high_priority),
     )
+    env_mode = os.environ.get("AIR_MODE")
     runner = RunnerConfig(
         main_branch=_string(runner_payload, "main_branch", RunnerConfig.main_branch),
         branch_prefix=_string(runner_payload, "branch_prefix", RunnerConfig.branch_prefix),
@@ -145,5 +154,11 @@ def load_config(repo_root: Path | None = None) -> AgenticIssueRunnerConfig:
             "remote_python_module_prefixes",
             RunnerConfig.remote_python_module_prefixes,
         ),
+        mode=(env_mode.strip() if env_mode else _string(runner_payload, "mode", RunnerConfig.mode)).lower(),
     )
-    return AgenticIssueRunnerConfig(gitlab=gitlab, labels=labels, runner=runner)
+    if runner.mode not in {"glab", "local"}:
+        raise ValueError(f"runner.mode must be 'glab' or 'local', got {runner.mode!r}")
+    local = LocalConfig(
+        issues_dir=_string(local_payload, "issues_dir", LocalConfig.issues_dir),
+    )
+    return AgenticIssueRunnerConfig(gitlab=gitlab, labels=labels, runner=runner, local=local)

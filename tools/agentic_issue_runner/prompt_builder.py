@@ -52,12 +52,21 @@ def build_worker_prompt(
     run_id: str,
     prompt_path: str,
     project_spec: ProjectRuntimeSpec | None = None,
+    worker_label: str = "Codex worker",
 ) -> str:
+    """Render the worker prompt.
+
+    `worker_label` is substituted into the prompt's opening sentence so a single
+    tracked template covers both Codex and Claude Code workers. Callers pass
+    "Codex worker" or "Claude Code worker"; the rest of the template (workflow,
+    safety, runtime block) stays CLI-agnostic.
+    """
     blockers = ", ".join(f"#{iid}" for iid in item.blocked_by) or "None"
     stack = ", ".join(f"!{iid}" for iid in item.stack_mrs) or "None"
     return load_worker_system_prompt().substitute(
         run_id=run_id,
         prompt_path=prompt_path,
+        worker_label=worker_label,
         runtime_spec_block=(project_spec or ProjectRuntimeSpec()).prompt_block(),
         selected_issue_metadata=_selected_issue_metadata(item, blockers=blockers, stack=stack),
         dependency_evidence=_dependency_evidence(item, stack=stack),

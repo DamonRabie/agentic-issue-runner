@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from tools.agentic_issue_runner.constants import AGENT_BRANCH_PREFIX, MAIN_BRANCH, PROXY_ENV_KEYS
+from tools.agentic_issue_runner.constants import AGENT_BRANCH_PREFIX, MAIN_BRANCH, RUNNER_MODE
 from tools.agentic_issue_runner.models import CommandResult
 from tools.logger import get_logger
 
@@ -62,16 +61,9 @@ class StartupGate:
     planned_commands: tuple[tuple[str, ...], ...]
 
 
-def without_proxy_env(env: dict[str, str] | None = None) -> dict[str, str]:
-    cleaned = dict(os.environ if env is None else env)
-    for key in PROXY_ENV_KEYS:
-        cleaned.pop(key, None)
-    return cleaned
-
-
 def default_runner(args: list[str], cwd: Path) -> CommandResult:
     logger.info("Running git startup command: %s", " ".join(args))
-    completed = subprocess.run(args, cwd=cwd, env=without_proxy_env(), check=False, capture_output=True, text=True)
+    completed = subprocess.run(args, cwd=cwd, check=False, capture_output=True, text=True)
     logger.info("Git startup command finished rc=%s: %s", completed.returncode, " ".join(args))
     return CommandResult(tuple(args), completed.returncode, completed.stdout, completed.stderr)
 
@@ -126,10 +118,13 @@ def startup_gate(repo_root: Path, runner: CommandRunner = default_runner) -> Sta
 
 
 def execute_startup_gate(repo_root: Path, runner: CommandRunner = default_runner) -> StartupGate:
-    planned = (
-        ("git", "fetch", "origin"),
-        ("git", "merge", "--ff-only", f"origin/{MAIN_BRANCH}"),
-    )
+    if RUNNER_MODE == "local":
+        planned: tuple[tuple[str, ...], ...] = ()
+    else:
+        planned = (
+            ("git", "fetch", "origin"),
+            ("git", "merge", "--ff-only", f"origin/{MAIN_BRANCH}"),
+        )
     assert_safe_command_plan(list(planned))
 
     status = runner(["git", "status", "--porcelain"], repo_root)

@@ -3,25 +3,17 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from pathlib import Path
 from typing import Iterable
 
-from tools.agentic_issue_runner.constants import PROJECT_HOST, PROJECT_PATH, PROJECT_REMOTE, PROXY_ENV_KEYS, READY_LABEL
+from tools.agentic_issue_runner.constants import LOCAL_ISSUES_DIR, PROJECT_HOST, PROJECT_PATH, PROJECT_REMOTE, READY_LABEL, RUNNER_MODE
 from tools.agentic_issue_runner.dependency_parser import parse_dependency_sections
 from tools.agentic_issue_runner.models import CommandResult, IssueRecord, MergeRequestRecord
 from tools.logger import get_logger
 
 
 logger = get_logger("[agentic-issue-runner]")
-
-
-def without_proxy_env(env: dict[str, str] | None = None) -> dict[str, str]:
-    cleaned = dict(os.environ if env is None else env)
-    for key in PROXY_ENV_KEYS:
-        cleaned.pop(key, None)
-    return cleaned
 
 
 def summarize_command(command: Iterable[str]) -> str:
@@ -53,7 +45,6 @@ class GlabAdapter:
         completed = subprocess.run(
             list(command),
             cwd=self.repo_root,
-            env=without_proxy_env(),
             check=False,
             capture_output=True,
             text=True,
@@ -209,3 +200,12 @@ def mr_from_glab_json(payload: dict) -> MergeRequestRecord:
         description=str(payload.get("description") or ""),
         issue_iid=int(issue_iid) if issue_iid is not None else None,
     )
+
+
+def make_adapter(repo_root: Path, *, dry_run: bool = False):
+    """Return a GlabAdapter or LocalIssueAdapter per configured runner mode."""
+    if RUNNER_MODE == "local":
+        from tools.agentic_issue_runner.local_adapter import LocalIssueAdapter
+
+        return LocalIssueAdapter(repo_root, LOCAL_ISSUES_DIR, dry_run=dry_run)
+    return GlabAdapter(repo_root, dry_run=dry_run)

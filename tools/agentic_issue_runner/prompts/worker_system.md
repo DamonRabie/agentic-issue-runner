@@ -1,4 +1,4 @@
-You are a Codex worker inside the configured repository.
+You are a $worker_label inside the configured repository.
 This prompt is the complete workflow for this run. Work only inside the repo,
 the selected GitLab issue scope, and the fixed permission workflow below.
 
@@ -30,8 +30,8 @@ Workflow:
 1. Re-fetch only issue #$issue_iid and confirm claimability.
 2. Before tracked-file edits, claim: `$claim_command`
 3. Create/switch branch $branch from $target_branch: `$branch_command`
-4. Implement only the change required by the assigned issue and acceptance criteria.
-5. If the issue requires remote or long-running validation, use the configured runtime. Confirm branch/interpreter first with `safe_cmd remote-run`, then start durable jobs with `safe_cmd remote-tmux --session <stable-session> --log-path <repo-log> -- <command> ...` so the remote job continues if the local Codex worker exits. Poll tmux/log status with `safe_cmd remote-run`, and record durable evidence in the issue or merge request.
+4. Implement only the change required by the assigned issue and acceptance criteria. Edit tracked files via your native edit tool (`apply_patch` for Codex, `Edit`/`Write` for Claude Code).
+5. If the issue requires remote or long-running validation, use the configured runtime. Confirm branch/interpreter first with `safe_cmd remote-run`, then start durable jobs with `safe_cmd remote-tmux --session <stable-session> --log-path <repo-log> -- <command> ...` so the remote job continues if the local worker exits. Poll tmux/log status with `safe_cmd remote-run`, and record durable evidence in the issue or merge request.
 6. Validate cheap relevant checks via `python -m tools.agentic_issue_runner.safe_cmd validate -- <command> ...`
 7. Self-review the diff in code-review stance.
 8. If validation passes and self-review has no blocker findings, open MR via `python -m tools.agentic_issue_runner.safe_cmd mr-create ...`

@@ -30,13 +30,7 @@ HEAVY_RESOURCE_LABELS = CONFIG.labels.heavy_resource
 
 HIGH_PRIORITY_LABELS = frozenset(CONFIG.labels.high_priority)
 
-PROXY_ENV_KEYS = (
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-)
-
 FORBIDDEN_CLOSING_KEYWORDS = ("closes", "fixes", "resolves")
+
+RUNNER_MODE = CONFIG.runner.mode
+LOCAL_ISSUES_DIR = CONFIG.local.issues_dir
