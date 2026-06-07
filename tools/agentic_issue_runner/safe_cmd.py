@@ -16,9 +16,10 @@ from tools.agentic_issue_runner.constants import (
     MAIN_BRANCH,
     PROJECT_REMOTE,
     REMOTE_PYTHON_MODULE_PREFIXES,
+    RUNNER_MODE,
 )
 from tools.agentic_issue_runner.git_planner import command_is_forbidden
-from tools.agentic_issue_runner.glab_adapter import GlabAdapter, without_proxy_env
+from tools.agentic_issue_runner.glab_adapter import GlabAdapter, make_adapter
 from tools.agentic_issue_runner.project_spec import RemoteRuntimeSpec, load_project_runtime_spec
 from tools.agentic_issue_runner.safety import assert_repo_path, is_inside_path
 from tools.agentic_issue_runner.state_machine import blocked_transition, claim_transition, success_transition
@@ -103,7 +104,6 @@ def run_command(args: Iterable[str], repo_root: Path = _ROOT) -> subprocess.Comp
     return subprocess.run(
         list(command),
         cwd=repo_root,
-        env=without_proxy_env(),
         check=False,
         capture_output=True,
         text=True,
@@ -206,12 +206,6 @@ def _remote_tmux_command_is_allowed(command: list[str]) -> bool:
     return False
 
 
-def _proxy_unset_shell_fragment() -> str:
-    return " ".join(
-        f"unset {key};" for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
-    )
-
-
 def _normalized_remote_command(remote: RemoteRuntimeSpec, command: list[str]) -> list[str]:
     assert_remote_command(command)
     remote_command = list(command)
@@ -244,8 +238,7 @@ def remote_ssh_command(remote: RemoteRuntimeSpec, command: list[str]) -> tuple[s
     ssh: list[str] = ["ssh"]
     if remote.jump_host:
         ssh.extend(["-J", remote.jump_host])
-    unset_proxy = _proxy_unset_shell_fragment()
-    remote_shell = f"cd {shlex.quote(remote.repo_path)} && {unset_proxy} {' '.join(shlex.quote(part) for part in remote_command)}"
+    remote_shell = f"cd {shlex.quote(remote.repo_path)} && {' '.join(shlex.quote(part) for part in remote_command)}"
     ssh.extend([remote.ssh_target, remote_shell])
     return tuple(ssh)
 
@@ -273,17 +266,16 @@ def remote_tmux_ssh_command(
         field_name="tmux log path",
     )
     log_parent = str(remote_log.parent)
-    unset_proxy = _proxy_unset_shell_fragment()
     command_text = " ".join(shlex.quote(part) for part in remote_command)
     inner_script = (
         f"cd {shlex.quote(remote.repo_path)} && "
         f"mkdir -p {shlex.quote(log_parent)} && "
-        f"{unset_proxy} exec {command_text} >> {shlex.quote(str(remote_log))} 2>&1"
+        f"exec {command_text} >> {shlex.quote(str(remote_log))} 2>&1"
     )
     tmux_command = f"sh -lc {shlex.quote(inner_script)}"
     remote_shell = (
         f"cd {shlex.quote(remote.repo_path)} && "
-        f"{unset_proxy} tmux new-session -d -s {shlex.quote(session_name)} {shlex.quote(tmux_command)} && "
+        f"tmux new-session -d -s {shlex.quote(session_name)} {shlex.quote(tmux_command)} && "
         f"printf '%s\\n' {shlex.quote(f'tmux session {session_name} started; log {remote_log}')}"
     )
     ssh: list[str] = ["ssh"]
@@ -320,7 +312,7 @@ def apply_claim(args: argparse.Namespace, repo_root: Path = _ROOT) -> int:
     require_base_branch(args.base_branch)
     if has_final_marker(repo_root, args.run_id):
         raise ValueError("run already has a final marker")
-    adapter = GlabAdapter(repo_root)
+    adapter = make_adapter(repo_root)
     issue = adapter.get_issue(args.issue)
     timestamp = datetime.now(timezone.utc).isoformat()
     transition = claim_transition(issue, run_id=args.run_id, timestamp=timestamp, branch=args.branch, base_branch=args.base_branch)
@@ -356,7 +348,7 @@ def mark_blocked_from_claim(
     claim = load_claim(repo_root, run_id)
     if claim is None or has_final_marker(repo_root, run_id):
         return False
-    adapter = GlabAdapter(repo_root)
+    adapter = make_adapter(repo_root)
     transition = blocked_transition(
         blocker=blocker,
         commands_run=commands_run,
@@ -404,7 +396,7 @@ def apply_success(args: argparse.Namespace, repo_root: Path = _ROOT) -> int:
     if has_final_marker(repo_root, args.run_id):
         raise ValueError("run already has a final marker")
     assert_clean_claimed_branch(repo_root, claim)
-    adapter = GlabAdapter(repo_root)
+    adapter = make_adapter(repo_root)
     transition = success_transition(
         mr_link=args.mr_link,
         validation=args.validation,
@@ -455,6 +447,18 @@ def apply_git(args: argparse.Namespace, repo_root: Path = _ROOT) -> int:
 def apply_mr_create(args: argparse.Namespace, repo_root: Path = _ROOT) -> int:
     require_agent_branch(args.source_branch)
     require_base_branch(args.target_branch)
+    if RUNNER_MODE == "local":
+        iid_match = re.match(rf"^{re.escape(AGENT_BRANCH_PREFIX)}/(\d+)-", args.source_branch)
+        if iid_match:
+            adapter = make_adapter(repo_root)
+            note = (
+                f"local mode: MR step skipped. "
+                f"Branch {args.source_branch} ready for review against {args.target_branch}.\n\n"
+                f"Title: {args.title}"
+            )
+            adapter.note_issue(int(iid_match.group(1)), note)
+        print(f"[local-mode] MR creation skipped. Branch={args.source_branch} target={args.target_branch}\n")
+        return 0
     result = run_command(
         (
             "glab",
@@ -480,7 +484,7 @@ def apply_mr_create(args: argparse.Namespace, repo_root: Path = _ROOT) -> int:
 
 
 def apply_comment(args: argparse.Namespace, repo_root: Path = _ROOT) -> int:
-    adapter = GlabAdapter(repo_root)
+    adapter = make_adapter(repo_root)
     adapter.note_issue(args.issue, args.body)
     return 0
 
@@ -504,7 +508,6 @@ def apply_remote_run(args: argparse.Namespace, repo_root: Path = _ROOT) -> int:
     result = subprocess.run(
         list(ssh_command),
         cwd=repo_root,
-        env=without_proxy_env(),
         check=False,
         capture_output=True,
         text=True,
@@ -530,7 +533,6 @@ def apply_remote_tmux(args: argparse.Namespace, repo_root: Path = _ROOT) -> int:
     result = subprocess.run(
         list(ssh_command),
         cwd=repo_root,
-        env=without_proxy_env(),
         check=False,
         capture_output=True,
         text=True,

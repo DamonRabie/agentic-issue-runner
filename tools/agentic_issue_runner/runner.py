@@ -6,17 +6,16 @@ Unattended loop orchestration for the agentic issue runner.
 from __future__ import annotations
 
 import json
-import os
 import select
 import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable, Literal
 
-from tools.agentic_issue_runner.constants import PROJECT_HOST
 from tools.agentic_issue_runner.dry_run import build_dry_run_plan
-from tools.agentic_issue_runner.glab_adapter import GlabAdapter, without_proxy_env
+from tools.agentic_issue_runner.glab_adapter import GlabAdapter
 from tools.agentic_issue_runner.models import IssueRecord, SchedulePlan, ScheduledIssue, StackDependency
 from tools.agentic_issue_runner.prompt_builder import build_worker_prompt
 from tools.agentic_issue_runner.project_spec import load_project_runtime_spec
@@ -32,6 +31,32 @@ from tools.logger import get_logger
 
 
 logger = get_logger("[agentic-issue-runner]")
+
+
+WorkerCli = Literal["codex", "claude"]
+
+# Default Claude model used when --worker-cli=claude is selected without --model.
+# Bump explicitly when the team wants a different default to keep unattended
+# runs reproducible.
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+
+
+@dataclass(frozen=True)
+class WorkerSpec:
+    """Which worker CLI (and model, where applicable) the launcher should use."""
+
+    cli: WorkerCli = "codex"
+    model: str | None = None
+
+    @property
+    def resolved_model(self) -> str | None:
+        if self.cli == "claude":
+            return self.model or DEFAULT_CLAUDE_MODEL
+        return None
+
+    @property
+    def label(self) -> str:
+        return "Codex worker" if self.cli == "codex" else "Claude Code worker"
 
 
 @dataclass(frozen=True)
@@ -58,6 +83,12 @@ class PromptRunConfig:
     max_issues: int
     issue_iid: int | None
     timeout_seconds: float
+    worker_cli: WorkerCli = "codex"
+    model: str | None = None
+
+    @property
+    def worker_spec(self) -> WorkerSpec:
+        return WorkerSpec(cli=self.worker_cli, model=self.model)
 
 
 @dataclass(frozen=True)
@@ -125,26 +156,54 @@ def codex_command(repo_root: Path) -> tuple[str, ...]:
     return ("codex", "-a", "untrusted", "exec", "-C", str(repo_root), "-s", "workspace-write", "--json", "-")
 
 
-def worker_env(env: dict[str, str] | None = None) -> dict[str, str]:
-    """Return the environment inherited by Codex workers.
+def claude_command(repo_root: Path, model: str) -> tuple[str, ...]:
+    # `--output-format stream-json` requires `--verbose` per the Claude Code CLI
+    # contract. `bypassPermissions` removes claude's interactive approval surface
+    # so unattended runs do not stall; the real safety boundary remains
+    # safe_cmd + the worker prompt + the post-run branch/worktree check,
+    # mirroring how `codex -a untrusted` is treated.
+    return (
+        "claude",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--input-format",
+        "text",
+        "--verbose",
+        "--model",
+        model,
+        "--permission-mode",
+        "bypassPermissions",
+        "--add-dir",
+        str(repo_root),
+    )
 
-    Workers need the operator's shell environment, including any proxy needed to
-    reach external model/API services. GitLab and git mutations still go through
-    GlabAdapter/safe_cmd, which remove proxy variables at the command boundary.
-    Read-only GitLab commands from the worker inherit the proxy variables, so
-    keep the self-managed GitLab host in NO_PROXY/no_proxy as a second guard.
-    """
-    inherited = dict(os.environ if env is None else env)
-    for key in ("NO_PROXY", "no_proxy"):
-        hosts = [part.strip() for part in inherited.get(key, "").split(",") if part.strip()]
-        if PROJECT_HOST not in hosts:
-            hosts.append(PROJECT_HOST)
-        inherited[key] = ",".join(hosts)
-    return inherited
+
+def build_worker_command(spec: WorkerSpec, repo_root: Path) -> tuple[str, ...]:
+    if spec.cli == "codex":
+        return codex_command(repo_root)
+    if spec.cli == "claude":
+        model = spec.resolved_model
+        assert model is not None
+        return claude_command(repo_root, model)
+    raise ValueError(f"Unknown worker CLI: {spec.cli!r}")
 
 
-def rules_path(repo_root: Path) -> Path:
-    return repo_root / ".codex" / "rules" / "overnight-agent.rules"
+_RULES_DIR_BY_CLI: dict[str, str] = {
+    "codex": ".codex",
+    "claude": ".claude",
+}
+
+_RULES_FILE_BY_CLI: dict[str, str] = {
+    "codex": "overnight-agent.rules",
+    "claude": "overnight-agent.json",
+}
+
+
+def rules_path(repo_root: Path, worker_cli: str = "codex") -> Path:
+    rules_dir = _RULES_DIR_BY_CLI.get(worker_cli, ".codex")
+    rules_file = _RULES_FILE_BY_CLI.get(worker_cli, "overnight-agent.rules")
+    return repo_root / rules_dir / "rules" / rules_file
 
 
 def execpolicy_check_command(repo_root: Path, check: ExecpolicyCheck) -> tuple[str, ...]:
@@ -154,7 +213,7 @@ def execpolicy_check_command(repo_root: Path, check: ExecpolicyCheck) -> tuple[s
         "check",
         "--pretty",
         "--rules",
-        str(rules_path(repo_root).resolve()),
+        str(rules_path(repo_root, "codex").resolve()),
         "--",
         *check.command,
     )
@@ -179,7 +238,7 @@ def execpolicy_decision_from_output(stdout: str) -> str | None:
 def verify_execpolicy_preflight(repo_root: Path) -> str | None:
     """Fail closed unless the checked-in overnight execpolicy has expected decisions."""
 
-    policy_path = rules_path(repo_root)
+    policy_path = rules_path(repo_root, "codex")
     if not policy_path.exists():
         return f"execpolicy rules file is missing: {policy_path.relative_to(repo_root)}"
 
@@ -211,6 +270,29 @@ def verify_execpolicy_preflight(repo_root: Path) -> str | None:
             return details
         logger.info("Execpolicy check passed: %s decision=%s.", check.name, decision)
     return None
+
+
+def verify_claude_rules_preflight(repo_root: Path) -> str | None:
+    """Claude has no execpolicy binary; require the rules file as a presence gate."""
+
+    policy_path = rules_path(repo_root, "claude")
+    if not policy_path.exists():
+        return f"claude rules file is missing: {policy_path.relative_to(repo_root)}"
+    logger.info("Claude rules file present: %s.", policy_path.relative_to(repo_root))
+    return None
+
+
+_WORKER_PREFLIGHTS: dict[str, Callable[[Path], str | None]] = {
+    "codex": verify_execpolicy_preflight,
+    "claude": verify_claude_rules_preflight,
+}
+
+
+def verify_worker_preflight(repo_root: Path, worker_cli: str) -> str | None:
+    preflight = _WORKER_PREFLIGHTS.get(worker_cli)
+    if preflight is None:
+        return f"no preflight registered for worker_cli={worker_cli!r}"
+    return preflight(repo_root)
 
 
 def approval_requested_event(line: str) -> bool:
@@ -260,13 +342,18 @@ def summarize_worker_event(line: str) -> str:
     return "; ".join(parts)[:500] or f"json keys={','.join(sorted(payload)[:12])}"
 
 
-def run_codex_worker(repo_root: Path, prompt: str, *, timeout_seconds: float) -> WorkerResult:
-    command = codex_command(repo_root)
-    logger.info("Starting Codex worker command: %s", " ".join(command))
+def run_codex_worker(
+    repo_root: Path,
+    prompt: str,
+    *,
+    timeout_seconds: float,
+    spec: WorkerSpec = WorkerSpec(),
+) -> WorkerResult:
+    command = build_worker_command(spec, repo_root)
+    logger.info("Starting %s command: %s", spec.label, " ".join(command))
     process = subprocess.Popen(
         list(command),
         cwd=repo_root,
-        env=worker_env(),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -286,7 +373,7 @@ def run_codex_worker(repo_root: Path, prompt: str, *, timeout_seconds: float) ->
         now = time.monotonic()
         elapsed = now - started
         if timeout_seconds > 0 and elapsed > timeout_seconds:
-            logger.info("Codex worker timed out after %.1f seconds; terminating.", elapsed)
+            logger.info("%s timed out after %.1f seconds; terminating.", spec.label, elapsed)
             process.terminate()
             try:
                 process.wait(timeout=5)
@@ -295,10 +382,11 @@ def run_codex_worker(repo_root: Path, prompt: str, *, timeout_seconds: float) ->
             return WorkerResult(process.returncode, "".join(output), timed_out=True)
         if now - last_progress >= 30:
             if last_output_at is None:
-                logger.info("Codex worker still running after %.1f seconds; no output received yet.", elapsed)
+                logger.info("%s still running after %.1f seconds; no output received yet.", spec.label, elapsed)
             else:
                 logger.info(
-                    "Codex worker still running after %.1f seconds; last output %.1f seconds ago.",
+                    "%s still running after %.1f seconds; last output %.1f seconds ago.",
+                    spec.label,
                     elapsed,
                     now - last_output_at,
                 )
@@ -310,10 +398,10 @@ def run_codex_worker(repo_root: Path, prompt: str, *, timeout_seconds: float) ->
                 if line:
                     output.append(line)
                     last_output_at = time.monotonic()
-                    logger.info("Codex worker output: %s", summarize_worker_event(line))
+                    logger.info("%s output: %s", spec.label, summarize_worker_event(line))
                     if approval_requested_event(line):
                         approval_requested = True
-                        logger.info("Codex worker requested approval; terminating fixed-permission run.")
+                        logger.info("%s requested approval; terminating fixed-permission run.", spec.label)
                         process.terminate()
                         try:
                             process.wait(timeout=5)
@@ -329,7 +417,8 @@ def run_codex_worker(repo_root: Path, prompt: str, *, timeout_seconds: float) ->
                     output.append(remainder)
             break
     logger.info(
-        "Codex worker exited returncode=%s approval_requested=%s output_lines=%d.",
+        "%s exited returncode=%s approval_requested=%s output_lines=%d.",
+        spec.label,
         process.returncode,
         approval_requested,
         len(output),
@@ -351,7 +440,6 @@ def post_run_safety_failure(repo_root: Path, claim: dict) -> tuple[str, str] | N
     branch = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
         cwd=repo_root,
-        env=without_proxy_env(),
         check=False,
         capture_output=True,
         text=True,
@@ -364,7 +452,6 @@ def post_run_safety_failure(repo_root: Path, claim: dict) -> tuple[str, str] | N
     status = subprocess.run(
         ["git", "status", "--short"],
         cwd=repo_root,
-        env=without_proxy_env(),
         check=False,
         capture_output=True,
         text=True,
@@ -380,7 +467,13 @@ def post_run_safety_failure(repo_root: Path, claim: dict) -> tuple[str, str] | N
     return None
 
 
-def finalize_unresolved_claim(repo_root: Path, *, run_id: str, result: WorkerResult) -> bool:
+def finalize_unresolved_claim(
+    repo_root: Path,
+    *,
+    run_id: str,
+    result: WorkerResult,
+    spec: WorkerSpec = WorkerSpec(),
+) -> bool:
     claim = load_claim(repo_root, run_id)
     if claim is None or has_final_marker(repo_root, run_id):
         logger.info("No unresolved claim to finalize for run_id=%s.", run_id)
@@ -400,7 +493,7 @@ def finalize_unresolved_claim(repo_root: Path, *, run_id: str, result: WorkerRes
         repo_root=repo_root,
         run_id=run_id,
         blocker=blocker,
-        commands_run=[" ".join(codex_command(repo_root))],
+        commands_run=[" ".join(build_worker_command(spec, repo_root))],
         key_logs=result.output[-4000:] or "No worker output captured.",
         next_step="Inspect the worker output and re-run after fixing the blocker.",
         branch_state=branch_state,
@@ -482,9 +575,13 @@ def run_prompt_rounds(
     if not plan.selected:
         logger.info("No selected issues in scheduler plan; no workers will be launched.")
     else:
-        execpolicy_failure = verify_execpolicy_preflight(config.repo_root)
-        if execpolicy_failure is not None:
-            logger.info("Stopping before worker launch because execpolicy preflight failed: %s", execpolicy_failure)
+        preflight_failure = verify_worker_preflight(config.repo_root, config.worker_cli)
+        if preflight_failure is not None:
+            logger.info(
+                "Stopping before worker launch because %s preflight failed: %s",
+                config.worker_cli,
+                preflight_failure,
+            )
             return PromptRunResult(
                 attempted=attempted,
                 prompt_paths=tuple(prompt_paths),
@@ -514,13 +611,14 @@ def run_prompt_rounds(
                 break
             logger.info("Preflight dependency check passed for issue #%d.", item.issue.iid)
 
-        prompt_path = write_prompt(config.repo_root, item, run_id=round_run_id)
+        prompt_path = write_prompt(config.repo_root, item, run_id=round_run_id, spec=config.worker_spec)
         prompt_paths.append(prompt_path)
         logger.info("Wrote worker prompt to %s.", prompt_path.relative_to(config.repo_root))
         result = run_codex_worker(
             config.repo_root,
             prompt_path.read_text(encoding="utf-8"),
             timeout_seconds=config.timeout_seconds,
+            spec=config.worker_spec,
         )
         worker_output_paths.append(write_worker_output(config.repo_root, run_id=round_run_id, result=result))
         claim = load_claim(config.repo_root, round_run_id)
@@ -529,7 +627,9 @@ def run_prompt_rounds(
             logger.info("Worker claimed issue #%s for run_id=%s.", claim.get("issue_id"), round_run_id)
         else:
             logger.info("Worker exited before claim for run_id=%s.", round_run_id)
-        blocked_by_launcher = finalize_unresolved_claim(config.repo_root, run_id=round_run_id, result=result)
+        blocked_by_launcher = finalize_unresolved_claim(
+            config.repo_root, run_id=round_run_id, result=result, spec=config.worker_spec
+        )
         if blocked_by_launcher:
             blocked += 1
             logger.info("Launcher marked run_id=%s as blocked.", round_run_id)
@@ -612,7 +712,13 @@ def build_plan_with_remote_evidence(
     )
 
 
-def write_prompt(repo_root: Path, item: ScheduledIssue, *, run_id: str) -> Path:
+def write_prompt(
+    repo_root: Path,
+    item: ScheduledIssue,
+    *,
+    run_id: str,
+    spec: WorkerSpec = WorkerSpec(),
+) -> Path:
     prompt_dir = repo_root / "artifacts" / "agentic_issue_runner" / run_id
     prompt_path = prompt_dir / f"issue-{item.issue.iid}.prompt.md"
     assert_runtime_path(repo_root, prompt_path, run_id=run_id)
@@ -622,6 +728,7 @@ def write_prompt(repo_root: Path, item: ScheduledIssue, *, run_id: str) -> Path:
         run_id=run_id,
         prompt_path=str(prompt_path.relative_to(repo_root)),
         project_spec=load_project_runtime_spec(repo_root),
+        worker_label=spec.label,
     )
     prompt_path.write_text(prompt, encoding="utf-8")
     return prompt_path
@@ -632,7 +739,6 @@ def run_worker(repo_root: Path, command: tuple[str, ...], prompt: str) -> subpro
     return subprocess.run(
         list(command),
         cwd=repo_root,
-        env=worker_env(),
         input=prompt,
         text=True,
         check=False,
